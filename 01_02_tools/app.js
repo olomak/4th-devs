@@ -1,5 +1,6 @@
 import {
   AI_API_KEY,
+  buildResponsesRequest,
   EXTRA_API_HEADERS,
   RESPONSES_API_ENDPOINT,
   resolveModelForProvider,
@@ -13,6 +14,9 @@ import {
 } from "./helper.js";
 
 const model = resolveModelForProvider("gpt-4.1-mini");
+
+// `buildResponsesRequest()` maps this to OpenAI web search or OpenRouter online mode.
+const webSearch = true;
 
 /*
   Step 1: Define tools the model can call.
@@ -34,26 +38,72 @@ const tools = [
     },
     strict: true,
   },
+  {
+    type: "function",
+    name: "send_email",
+    description: "Send a short email message to a recipient",
+    parameters: {
+      type: "object",
+      properties: {
+        to: { type: "string", description: "Recipient email address" },
+        subject: { type: "string", description: "Email subject" },
+        body: { type: "string", description: "Plain-text email body" },
+      },
+      required: ["to", "subject", "body"],
+      additionalProperties: false,
+    },
+    strict: true,
+  },
 ];
 
 /*
   Step 2: Implement the actual logic behind each tool.
   This is regular code — the model has no access to it.
-  Here we just return hardcoded data; in a real app this would call an external API.
+  Here we just return hardcoded data and a mocked email confirmation.
 */
+const requireText = (value, fieldName) => {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`"${fieldName}" must be a non-empty string.`);
+  }
+
+  return value.trim();
+};
+
 const handlers = {
   get_weather({ location }) {
+    const city = requireText(location, "location");
     const weather = {
       "Kraków": { temp: -2, conditions: "snow" },
       "London": { temp: 8, conditions: "rain" },
       "Tokyo": { temp: 15, conditions: "cloudy" },
     };
-    return weather[location] ?? { temp: null, conditions: "unknown" };
+    return weather[city] ?? { temp: null, conditions: "unknown" };
+  },
+
+  send_email({ to, subject, body }) {
+    const recipient = requireText(to, "to");
+    const emailSubject = requireText(subject, "subject");
+    const emailBody = requireText(body, "body");
+
+    return {
+      success: true,
+      status: "sent",
+      to: recipient,
+      subject: emailSubject,
+      body: emailBody,
+    };
   },
 };
 
 /* Step 3: Send messages + tool definitions to the Responses API */
 const requestResponse = async (input) => {
+  const body = buildResponsesRequest({
+    model,
+    input,
+    tools,
+    webSearch,
+  });
+
   const response = await fetch(RESPONSES_API_ENDPOINT, {
     method: "POST",
     headers: {
@@ -61,7 +111,7 @@ const requestResponse = async (input) => {
       Authorization: `Bearer ${AI_API_KEY}`,
       ...EXTRA_API_HEADERS,
     },
-    body: JSON.stringify({ model, tools, input }),
+    body: JSON.stringify(body),
   });
 
   const data = await response.json();
@@ -102,7 +152,7 @@ const chat = async (conversation) => {
   throw new Error(`Tool calling did not finish within ${MAX_TOOL_STEPS} steps.`);
 };
 
-const query = "What's the weather in Kraków?";
+const query = "Use web search to check the current weather in Kraków. Then send a short email with the answer to student@example.com.";
 logQuestion(query);
 
 const answer = await chat([{ role: "user", content: query }]);
